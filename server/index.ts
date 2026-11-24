@@ -29,6 +29,8 @@ import fileRouter from './routerExpress/file/file';
 import uploadRouter from './routerExpress/file/upload';
 import deleteRouter from './routerExpress/file/delete';
 import s3fileRouter from './routerExpress/file/s3file';
+import gdrivefileRouter from './routerExpress/file/gdrivefile';
+import gdriveOAuthRouter from './routerExpress/file/gdriveOAuth';
 import pluginRouter from './routerExpress/file/plugin';
 import rssRouter from './routerExpress/rss';
 import openaiRouter from './routerExpress/openai';
@@ -150,6 +152,8 @@ async function setupApiRoutes(app: express.Application) {
   app.use('/api/file/upload', uploadRouter);
   app.use('/api/file/delete', deleteRouter);
   app.use('/api/s3file', s3fileRouter);
+  app.use('/api/gdrivefile', gdrivefileRouter);
+  app.use('/api/gdrive', gdriveOAuthRouter);
   
   // Helper function to serve vditor dependencies with gzip compression
   const serveVditorFile = (routePath: string, filePath: string) => {

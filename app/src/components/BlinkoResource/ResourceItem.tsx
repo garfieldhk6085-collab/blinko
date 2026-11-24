@@ -36,7 +36,7 @@ export const ResourceItemPreview = ({
 }) => {
   const { t } = useTranslation();
   const isImage = item.type?.startsWith('image/');
-  const isS3File = item.path?.includes('s3file');
+  const isS3File = item.path?.includes('s3file') || item.path?.includes('gdrivefile');
 
   const fileNameAndExt = useMemo(() => {
     const lastDotIndex = item.name.lastIndexOf('.');
@@ -145,7 +145,7 @@ const ResourceCard = observer(({ item, isSelected, onSelect, isDragging, isDragg
     };
   }, [item.name]);
 
-  const isS3File = useMemo(() => item.path?.includes('s3file'), [item.path]);
+  const isS3File = useMemo(() => item.path?.includes('s3file') || item.path?.includes('gdrivefile'), [item.path]);
 
   const handleContextMenu = useCallback(() => {
     resourceStore.setContextMenuResource(_.cloneDeep(item));

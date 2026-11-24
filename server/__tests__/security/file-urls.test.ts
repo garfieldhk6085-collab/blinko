@@ -13,7 +13,7 @@ afterEach(() => {
   else (globalThis as any).window = originalWindow;
 });
 
-for (const storage of ['file', 's3file']) {
+for (const storage of ['file', 's3file', 'gdrivefile']) {
   test(`${storage}: a password-share grant survives preview, thumbnail, playback and download URL composition`, async () => {
     const note = {
       id: 15,
