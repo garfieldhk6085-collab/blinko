@@ -11,6 +11,7 @@ import { PassThrough } from 'stream';
 import { createWriteStream } from "fs";
 import pathIsInside from 'path-is-inside';
 import sanitizeFilename from 'sanitize-filename';
+import { GoogleDriveService } from './googleDrive';
 
 /**
  * Sanitize a filename for safe filesystem storage.
@@ -125,9 +126,39 @@ export class FileService {
         throw new Error('Invalid S3 path: path traversal detected');
       }
       return filePath; // Return relative path for S3
+    } else if (apiPath.includes('/api/gdrivefile/')) {
+      // For Google Drive files, validate path structure and return relative path
+      filePath = apiPath.replace('/api/gdrivefile/', '');
+      if (filePath.includes('..') || filePath.includes('\\..') || filePath.includes('/..')) {
+        throw new Error('Invalid Google Drive path: path traversal detected');
+      }
+      return filePath;
     }
 
     return this.validateAndResolvePath(filePath, baseDir, allowTemp);
+  }
+
+  public static async resolveGoogleDriveFileId(apiPath: string): Promise<string> {
+    const normalizedApiPath = apiPath.startsWith('/api/gdrivefile/')
+      ? apiPath
+      : `/api/gdrivefile/${apiPath.replace(/^\/+/, '')}`;
+
+    if (typeof prisma?.attachments?.findFirst === 'function') {
+      const attachment = await prisma.attachments.findFirst({
+        where: { path: normalizedApiPath }
+      });
+      const metadataFileId = (attachment?.metadata as Record<string, any> | null)?.googleDriveFileId;
+      if (typeof metadataFileId === 'string' && metadataFileId.length > 0) {
+        return metadataFileId;
+      }
+    }
+
+    const relativePath = this.extractAndValidatePath(normalizedApiPath);
+    const resolvedId = await GoogleDriveService.resolveFileIdByPath(decodeURIComponent(relativePath));
+    if (!resolvedId) {
+      throw new Error(`Google Drive file not found: ${relativePath}`);
+    }
+    return resolvedId;
   }
   
   public static async getS3Client() {
@@ -239,6 +270,34 @@ export class FileService {
         });
       }
       return { filePath: s3Url, fileName: FileService.getOriginFilename(timestampedFileName) };
+    } else if (config.objectStorage === 'gdrive') {
+      let customPath = config.googleDriveCustomPath || '';
+      if (customPath) {
+        customPath = customPath.startsWith('/') ? customPath : '/' + customPath;
+        customPath = customPath.endsWith('/') ? customPath : customPath + '/';
+      }
+
+      const timestampedFileName = `${baseName}_${timestamp}${extension}`;
+      const gdriveKey = `${customPath}${timestampedFileName}`.replace(/^\//, '');
+
+      const { fileId } = await GoogleDriveService.uploadBuffer({
+        relativePath: gdriveKey,
+        buffer,
+        mimeType: type || 'application/octet-stream',
+      });
+
+      const gdriveUrl = `/api/gdrivefile/${gdriveKey}`;
+      if (!withOutAttachment) {
+        await FileService.createAttachment({
+          path: gdriveUrl,
+          name: FileService.getOriginFilename(timestampedFileName),
+          size: buffer.length,
+          type,
+          accountId,
+          metadata: { ...(metadata || {}), googleDriveFileId: fileId }
+        });
+      }
+      return { filePath: gdriveUrl, fileName: FileService.getOriginFilename(timestampedFileName) };
     } else {
       const filename = await this.writeFileSafe(baseName, extension, buffer);
       await FileService.createAttachment({
@@ -272,6 +331,22 @@ export class FileService {
       if (attachmentPath) {
         await prisma.attachments.delete({ where: { id: attachmentPath.id } })
       }
+    } else if (api_attachment_path.includes('/api/gdrivefile/')) {
+      const attachmentPath = await prisma.attachments.findFirst({ where: { path: api_attachment_path } });
+      const metadataFileId = (attachmentPath?.metadata as Record<string, any> | null)?.googleDriveFileId;
+      let fileId: string | null = typeof metadataFileId === 'string' && metadataFileId.length > 0
+        ? metadataFileId
+        : null;
+      if (!fileId) {
+        const relativePath = this.extractAndValidatePath(api_attachment_path);
+        fileId = await GoogleDriveService.resolveFileIdByPath(decodeURIComponent(relativePath));
+      }
+      if (fileId) {
+        await GoogleDriveService.deleteFile(fileId);
+      }
+      if (attachmentPath) {
+        await prisma.attachments.delete({ where: { id: attachmentPath.id } });
+      }
     } else {
       const filepath = this.extractAndValidatePath(api_attachment_path);
       const attachmentPath = await prisma.attachments.findFirst({ where: { path: api_attachment_path } })
@@ -284,16 +359,22 @@ export class FileService {
 
 
   /**
-   * Get file buffer from S3 or local storage without creating temporary files
+   * Get file buffer from S3, Google Drive, or local storage without creating temporary files
    */
   static async getFileBuffer(filePath: string): Promise<Buffer> {
     const config = await getGlobalConfig({ useAdmin: true });
 
     // Existing attachments retain their original storage after a configuration
     // switch. Only unprefixed internal paths use the current storage setting.
+    const isGDrive = filePath.startsWith('/api/gdrivefile/') ||
+      (!filePath.startsWith('/api/file/') && !filePath.startsWith('/api/s3file/') && config.objectStorage === 'gdrive');
     const isS3 = filePath.startsWith('/api/s3file/') ||
-      (!filePath.startsWith('/api/file/') && config.objectStorage === 's3');
-    if (isS3) {
+      (!filePath.startsWith('/api/file/') && !filePath.startsWith('/api/gdrivefile/') && config.objectStorage === 's3');
+
+    if (isGDrive) {
+      const fileId = await this.resolveGoogleDriveFileId(filePath);
+      return await GoogleDriveService.downloadBuffer(fileId);
+    } else if (isS3) {
       const { s3ClientInstance } = await this.getS3Client();
       const fileName = this.extractAndValidatePath(filePath);
       const command = new GetObjectCommand({
@@ -314,14 +395,17 @@ export class FileService {
   }
 
   /**
-   * Get temporary file path (creates local copy for S3 files)
-   * WARNING: This method creates temporary files for S3 storage. Use getFileBuffer() when possible.
-   * Remember to clean up the returned path for S3 files after use.
+   * Get temporary file path (creates local copy for S3/Google Drive files)
+   * WARNING: This method creates temporary files for remote storage. Use getFileBuffer() when possible.
+   * Remember to clean up the returned path for remote files after use.
    */
   static async getFile(filePath: string): Promise<{ path: string; isTemporary: boolean; cleanup?: () => Promise<void> }> {
     const config = await getGlobalConfig({ useAdmin: true });
+    const isRemote = filePath.startsWith('/api/s3file/') ||
+      filePath.startsWith('/api/gdrivefile/') ||
+      (!filePath.startsWith('/api/file/') && (config.objectStorage === 's3' || config.objectStorage === 'gdrive'));
 
-    if (config.objectStorage === 's3') {
+    if (isRemote) {
       const fileName = this.extractAndValidatePath(filePath);
       const tempFileName = `${Date.now()}_${path.basename(fileName)}`;
       const tempPath = this.validateAndResolvePath(`temp/${tempFileName}`, UPLOAD_FILE_PATH, true);
@@ -424,6 +508,32 @@ export class FileService {
         });
         return { filePath: s3Url, fileName: timestampedFileName };
 
+      } else if (config.objectStorage === 'gdrive') {
+        let customPath = config.googleDriveCustomPath || '';
+        if (customPath) {
+          customPath = customPath.startsWith('/') ? customPath : '/' + customPath;
+          customPath = customPath.endsWith('/') ? customPath : customPath + '/';
+        }
+
+        const gdriveKey = `${customPath}${timestampedFileName}`.replace(/^\//, '');
+        const { fileId } = await GoogleDriveService.uploadStream({
+          relativePath: gdriveKey,
+          stream,
+          fileSize,
+          mimeType: type || 'application/octet-stream',
+        });
+
+        const gdriveUrl = `/api/gdrivefile/${gdriveKey}`;
+        await FileService.createAttachment({
+          path: gdriveUrl,
+          name: timestampedFileName,
+          size: fileSize,
+          type,
+          accountId,
+          metadata: { ...(metadata || {}), googleDriveFileId: fileId }
+        });
+        return { filePath: gdriveUrl, fileName: timestampedFileName };
+
       } else {
         let customPath = config.localCustomPath || '';
         if (customPath) {
@@ -491,6 +601,7 @@ export class FileService {
     const pathParts = (path as string)
       .replace('/api/file/', '')
       .replace('/api/s3file/', '')
+      .replace('/api/gdrivefile/', '')
       .split('/');
 
     const prefixPath = pathParts.slice(0, -1).join(',');
@@ -537,6 +648,14 @@ export class FileService {
         } catch (error) {
           console.error('S3 rename operation failed:', error);
           throw new Error(`Failed to rename file in S3: ${error.message}`);
+        }
+      } else if (oldPath.includes('/api/gdrivefile/')) {
+        try {
+          const fileId = await this.resolveGoogleDriveFileId(oldPath);
+          await GoogleDriveService.renameFile(fileId, newName);
+        } catch (error: any) {
+          console.error('Google Drive rename operation failed:', error);
+          throw new Error(`Failed to rename file in Google Drive: ${error.message}`);
         }
       } else {
         const oldFilePath = this.extractAndValidatePath(oldPath);
@@ -594,6 +713,15 @@ export class FileService {
       } catch (error) {
         console.error('S3 operation failed:', error);
         throw new Error(`Failed to move file in S3: ${error.message}`);
+      }
+    } else if (oldPath.includes('/api/gdrivefile/')) {
+      const newKey = newPath.replace('/api/gdrivefile/', '').replace(/^\//, '');
+      try {
+        const fileId = await this.resolveGoogleDriveFileId(oldPath);
+        await GoogleDriveService.moveFile(fileId, decodeURIComponent(newKey));
+      } catch (error: any) {
+        console.error('Google Drive move operation failed:', error);
+        throw new Error(`Failed to move file in Google Drive: ${error.message}`);
       }
     } else {
       const oldFilePath = this.extractAndValidatePath(oldPath);

@@ -83,6 +83,7 @@ async function main() {
         const pathParts = attachment.path
           .replace('/api/file/', '')
           .replace('/api/s3file/', '')
+          .replace('/api/gdrivefile/', '')
           .split('/');
 
         await prisma.attachments.update({

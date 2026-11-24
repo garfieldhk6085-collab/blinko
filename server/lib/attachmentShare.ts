@@ -68,7 +68,7 @@ export async function withAttachmentShareLinks<
       path: urls.get(file.path)!,
     })),
     content: note.content.replace(
-      /(\/api\/(?:file|s3file)\/[^\s)"<>?#]+)(\?[^\s)"<>#]*)?/g,
+      /(\/api\/(?:file|s3file|gdrivefile)\/[^\s)"<>?#]+)(\?[^\s)"<>#]*)?/g,
       (whole, url, query) => {
         let decoded: string;
         try {

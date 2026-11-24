@@ -26,7 +26,7 @@ export function fileUrl(input: string, endpoint: string, options: FileUrlOptions
     // throw during React rendering. Without a valid URL, add no credentials.
     return input;
   }
-  if (!isBlinkoUrl(url.href, endpoint) || !/^\/api\/(?:s3)?file\//.test(url.pathname)) {
+  if (!isBlinkoUrl(url.href, endpoint) || !/^\/api\/(?:s3|gdrive)?file\//.test(url.pathname)) {
     return url.href;
   }
   if (options.token) {

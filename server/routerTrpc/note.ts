@@ -906,8 +906,8 @@ export const noteRouter = router({
       const config = await getGlobalConfig({ ctx });
 
       const markdownImages =
-        content?.match(/!\[.*?\]\((\/api\/(?:s3)?file\/[^)]+)\)/g)?.map((match) => {
-          const matches = /!\[.*?\]\((\/api\/(?:s3)?file\/[^)]+)\)/.exec(match);
+        content?.match(/!\[.*?\]\((\/api\/(?:s3|gdrive)?file\/[^)]+)\)/g)?.map((match) => {
+          const matches = /!\[.*?\]\((\/api\/(?:s3|gdrive)?file\/[^)]+)\)/.exec(match);
           return matches?.[1] || '';
         }) || [];
       // Validate every registered attachment before notes, history, tags or

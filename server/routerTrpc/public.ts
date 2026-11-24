@@ -254,6 +254,18 @@ export const publicRouter = router({
               }
               throw error;
             }
+          } else if (input.filePath.includes('/api/gdrivefile/')) {
+            try {
+              const gdriveIndex = input.filePath.indexOf('/api/gdrivefile/');
+              const apiPath = input.filePath.slice(gdriveIndex).split('?')[0]!;
+              const fileBuffer = await FileService.getFileBuffer(apiPath);
+              metadata = await mm.parseBuffer(new Uint8Array(fileBuffer), {
+                mimeType: 'audio/mpeg',
+              });
+            } catch (error) {
+              console.error('Failed to get Google Drive file metadata:', error);
+              throw error;
+            }
           } else if (input.filePath.includes('s3file')) {
             try {
               const response = await fetch(input.filePath);

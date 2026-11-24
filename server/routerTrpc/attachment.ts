@@ -138,6 +138,7 @@ export const attachmentsRouter = router({
               NULL as id,
               CASE 
                 WHEN path LIKE '/api/s3file/%' THEN '/api/s3file/'
+                WHEN path LIKE '/api/gdrivefile/%' THEN '/api/gdrivefile/'
                 ELSE '/api/file/'
               END || split_part("perfixPath", ',', array_length(string_to_array(${folderPath}, ','), 1) + 1) as path,
               split_part("perfixPath", ',', array_length(string_to_array(${folderPath}, ','), 1) + 1) as name,
@@ -197,6 +198,7 @@ export const attachmentsRouter = router({
             NULL as id,
             CASE 
               WHEN path LIKE '/api/s3file/%' THEN '/api/s3file/'
+              WHEN path LIKE '/api/gdrivefile/%' THEN '/api/gdrivefile/'
               ELSE '/api/file/'
             END || split_part("perfixPath", ',', 1) as path,
             split_part("perfixPath", ',', 1) as name,
@@ -289,8 +291,11 @@ export const attachmentsRouter = router({
             for (const attachment of attachments) {
               const newPerfixPath = attachment.perfixPath?.replace(oldFolderPath, newName);
               const oldPath = attachment.path;
-              const isS3File = oldPath.startsWith('/api/s3file/');
-              const baseUrl = isS3File ? '/api/s3file/' : '/api/file/';
+              const baseUrl = oldPath.startsWith('/api/s3file/')
+                ? '/api/s3file/'
+                : oldPath.startsWith('/api/gdrivefile/')
+                  ? '/api/gdrivefile/'
+                  : '/api/file/';
 
               const newPath = attachment.path.replace(
                 `${baseUrl}${oldFolderPath.split(',').join('/')}`,
@@ -368,8 +373,11 @@ export const attachmentsRouter = router({
           for (const attachment of attachments) {
             const newPerfixPath = targetFolder;
             const oldPath = attachment.path;
-            const isS3File = oldPath.startsWith('/api/s3file/');
-            const baseUrl = isS3File ? '/api/s3file/' : '/api/file/';
+            const baseUrl = oldPath.startsWith('/api/s3file/')
+              ? '/api/s3file/'
+              : oldPath.startsWith('/api/gdrivefile/')
+                ? '/api/gdrivefile/'
+                : '/api/file/';
 
             const newPath = targetFolder 
               ? `${baseUrl}${targetFolder.split(',').join('/')}/${attachment.name}`
